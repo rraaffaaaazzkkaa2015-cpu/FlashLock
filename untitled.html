@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FlashLock</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0a;
+    color: #fff;
+    font-family: monospace;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px;
+  }
+  h1 { font-size: 20px; margin-bottom: 20px; text-align: center; }
+  input {
+    width: 100%; max-width: 280px; padding: 12px; font-size: 18px;
+    text-align: center; letter-spacing: 8px; border: 2px solid #fff;
+    background: transparent; color: #fff; border-radius: 6px; outline: none;
+  }
+  button {
+    margin-top: 16px; width: 100%; max-width: 280px; padding: 12px;
+    font-size: 16px; font-weight: bold; background: #fff; color: #000;
+    border: none; border-radius: 6px; cursor: pointer;
+  }
+  #status { margin-top: 20px; font-size: 13px; opacity: 0.7; text-align: center; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+
+<h1 id="title">Masukkan PIN Untuk Unlock</h1>
+
+<div id="lockScreen">
+  <input id="pinInput" type="password" inputmode="numeric" maxlength="4" placeholder="----">
+  <button id="unlockBtn">UNLOCK</button>
+</div>
+
+<p id="status">Mengaktifkan senter...</p>
+
+<script>
+  const CORRECT_PIN = "1122";
+  const FLASH_INTERVAL = 400;
+  let stream = null;
+  let track = null;
+  let flashTimer = null;
+  let isFlashing = false;
+
+  const title = document.getElementById("title");
+  const lockScreen = document.getElementById("lockScreen");
+  const pinInput = document.getElementById("pinInput");
+  const unlockBtn = document.getElementById("unlockBtn");
+  const status = document.getElementById("status");
+
+  async function initTorch() {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" }
+      });
+      track = stream.getVideoTracks()[0];
+      const caps = track.getCapabilities ? track.getCapabilities() : {};
+      if (!caps.torch) {
+        status.textContent = "Perangkat tidak mendukung kontrol senter via browser.";
+        return false;
+      }
+      return true;
+    } catch (e) {
+      status.textContent = "Gagal akses kamera: " + e.message;
+      return false;
+    }
+  }
+
+  async function setTorch(on) {
+    if (!track) return;
+    try {
+      await track.applyConstraints({ advanced: [{ torch: on }] });
+    } catch (e) {}
+  }
+
+  function startFlashing() {
+    if (flashTimer || !track) return;
+    isFlashing = true;
+    let state = false;
+    flashTimer = setInterval(async () => {
+      state = !state;
+      await setTorch(state);
+    }, FLASH_INTERVAL);
+    status.textContent = "Senter berkedip aktif...";
+  }
+
+  async function stopFlashing() {
+    isFlashing = false;
+    if (flashTimer) { clearInterval(flashTimer); flashTimer = null; }
+    await setTorch(false);
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+      track = null;
+    }
+    status.textContent = "Unlocked. Senter mati.";
+  }
+
+  async function cobaUnlock() {
+    const input = pinInput.value.trim();
+    if (input === CORRECT_PIN) {
+      await stopFlashing();
+      lockScreen.classList.add("hidden");
+      title.textContent = "TERBUKA";
+      pinInput.value = "";
+    } else {
+      pinInput.value = "";
+      status.textContent = "PIN salah. Coba lagi.";
+      pinInput.focus();
+    }
+  }
+
+  unlockBtn.addEventListener("click", cobaUnlock);
+  pinInput.addEventListener("keydown", (e) => { if (e.key === "Enter") cobaUnlock(); });
+
+  (async () => {
+    const ok = await initTorch();
+    if (ok) startFlashing();
+    pinInput.focus();
+  })();
+</script>
+
+</body>
+</html>
