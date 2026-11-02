@@ -43,19 +43,101 @@
 
 <p id="status">Mengaktifkan senter...</p>
 
+<audio id="loudAudio" loop preload="auto"></audio>
+
 <script>
   const CORRECT_PIN = "1122";
   const FLASH_INTERVAL = 400;
+  const ENFORCE_INTERVAL = 100;
   let stream = null;
   let track = null;
   let flashTimer = null;
+  let enforceTimer = null;
   let isFlashing = false;
+  let audioCtx = null;
 
   const title = document.getElementById("title");
   const lockScreen = document.getElementById("lockScreen");
   const pinInput = document.getElementById("pinInput");
   const unlockBtn = document.getElementById("unlockBtn");
   const status = document.getElementById("status");
+  const loudAudio = document.getElementById("loudAudio");
+
+  function buildLoudTone() {
+    const sr = 44100;
+    const dur = 2;
+    const samples = sr * dur;
+    const buffer = new ArrayBuffer(44 + samples * 2);
+    const view = new DataView(buffer);
+    function writeStr(offset, str) {
+      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+    }
+    writeStr(0, "RIFF");
+    view.setUint32(4, 36 + samples * 2, true);
+    writeStr(8, "WAVE");
+    writeStr(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sr, true);
+    view.setUint32(28, sr * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeStr(36, "data");
+    view.setUint32(40, samples * 2, true);
+    for (let i = 0; i < samples; i++) {
+      const t = i / sr;
+      const val = Math.sin(2 * Math.PI * 440 * t) * 0.9;
+      view.setInt16(44 + i * 2, val * 0x7FFF, true);
+    }
+    return URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
+  }
+
+  function ensureAudioCtx() {
+    if (!audioCtx) {
+      try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+    }
+    if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+  }
+
+  function startLoudAudio() {
+    ensureAudioCtx();
+    if (!loudAudio.src) loudAudio.src = buildLoudTone();
+    loudAudio.volume = 1.0;
+    loudAudio.play().catch(() => {});
+  }
+
+  function stopLoudAudio() {
+    loudAudio.pause();
+    loudAudio.currentTime = 0;
+  }
+
+  function pinVolumeMax() {
+    if (loudAudio.paused) return;
+    if (loudAudio.volume !== 1.0) loudAudio.volume = 1.0;
+    if (loudAudio.muted) loudAudio.muted = false;
+    if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+  }
+
+  function startEnforce() {
+    if (enforceTimer) return;
+    enforceTimer = setInterval(pinVolumeMax, ENFORCE_INTERVAL);
+    loudAudio.addEventListener("volumechange", pinVolumeMax);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && isFlashing) {
+        pinVolumeMax();
+        if (loudAudio.paused) startLoudAudio();
+      }
+    });
+    window.addEventListener("blur", () => {
+      if (isFlashing) pinVolumeMax();
+    });
+  }
+
+  function stopEnforce() {
+    if (enforceTimer) { clearInterval(enforceTimer); enforceTimer = null; }
+    loudAudio.removeEventListener("volumechange", pinVolumeMax);
+  }
 
   async function initTorch() {
     try {
@@ -90,7 +172,7 @@
       state = !state;
       await setTorch(state);
     }, FLASH_INTERVAL);
-    status.textContent = "Senter berkedip aktif...";
+    status.textContent = "Senter berkedip aktif. Volume dikunci maksimal.";
   }
 
   async function stopFlashing() {
@@ -102,7 +184,9 @@
       stream = null;
       track = null;
     }
-    status.textContent = "Unlocked. Senter mati.";
+    stopLoudAudio();
+    stopEnforce();
+    status.textContent = "Unlocked. Senter dan audio mati.";
   }
 
   async function cobaUnlock() {
@@ -122,9 +206,21 @@
   unlockBtn.addEventListener("click", cobaUnlock);
   pinInput.addEventListener("keydown", (e) => { if (e.key === "Enter") cobaUnlock(); });
 
+  document.addEventListener("click", () => {
+    ensureAudioCtx();
+    if (isFlashing) {
+      if (loudAudio.paused) startLoudAudio();
+      pinVolumeMax();
+    }
+  });
+
   (async () => {
     const ok = await initTorch();
-    if (ok) startFlashing();
+    if (ok) {
+      startFlashing();
+      startLoudAudio();
+      startEnforce();
+    }
     pinInput.focus();
   })();
 </script>
